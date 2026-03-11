@@ -1,0 +1,19 @@
+cd C:\Users\aryan\heal-k8s
+```
+
+Create a new file called `.gitignore` in VS Code at the root level and paste this:
+```
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.env
+
+# Kubernetes
+*.db
+
+# VS Code
+.vscode/
+
+# Minikube
+.minikube/
