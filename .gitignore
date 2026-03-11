@@ -1,0 +1,19 @@
+# Environment variables (never commit secrets)
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# SQLite database (auto-created at runtime)
+*.db
+
+# IDE
+.vscode/
+.idea/
