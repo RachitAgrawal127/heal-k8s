@@ -56,8 +56,8 @@ Prometheus Metrics
                  │ (if unknown failure)
                  ▼
 ┌─────────────────────────────────┐
-│  Layer 3: LLM Fallback          │  ← Claude / GPT-4o last resort only
-│  (Function Calling JSON output) │    ~10% of real incidents
+│  Layer 3: LLM Fallback          │  ← Gemini last resort only
+│  (Structured JSON output)       │    ~10% of real incidents
 └────────────────┬────────────────┘
                  │
                  ▼
@@ -93,6 +93,7 @@ heal-k8s/
 │   ├── leaky_app.py      # Intentional memory leak for demo
 │   ├── leak-pod.yaml     # Kubernetes pod manifest
 │   ├── k8s_executor.py   # Kubernetes Python Client execution engine
+│   ├── api.py            # FastAPI server for infrastructure endpoints
 │   └── prometheus/
 │       └── values.yaml   # Prometheus Helm config
 │
@@ -100,7 +101,7 @@ heal-k8s/
 │   ├── main.py           # FastAPI app + all API endpoints
 │   ├── predictor.py      # Time-series predictive engine
 │   ├── signature_engine.py  # Regex-based failure signature matching
-│   └── llm_fallback.py   # LLM fallback for unknown failures
+│   └── llm_fallback.py   # Gemini fallback for unknown failures
 │
 ├── frontend/             # Person C — Dashboard
 │   ├── index.html        # Main dashboard page
@@ -133,7 +134,7 @@ heal-k8s/
 | Backend | FastAPI (Python) |
 | Predictive Engine | Pure Python — time-series rate-of-change math |
 | Signature Engine | Python — regex + rule dictionary |
-| LLM Fallback | Claude 3.5 Sonnet / GPT-4o — Function Calling |
+| LLM Fallback | Google Gemini 2.0 Flash — free tier |
 | Incident Memory | SQLite (Python standard library) |
 | Execution Engine | Kubernetes Python Client |
 | Dashboard | Vanilla JS + Chart.js |
@@ -148,7 +149,7 @@ heal-k8s/
 - [Minikube](https://minikube.sigs.k8s.io/docs/start/)
 - [kubectl](https://kubernetes.io/docs/tasks/tools/)
 - [Helm](https://helm.sh/docs/intro/install/)
-- An Anthropic or OpenAI API key (for LLM fallback only)
+- A free Gemini API key from [aistudio.google.com](https://aistudio.google.com/app/apikey)
 
 ### 1. Clone the repo
 
@@ -167,8 +168,8 @@ pip install -r requirements.txt
 
 ```bash
 cp .env.example .env
-# Edit .env and add your API key:
-# ANTHROPIC_API_KEY=your_key_here
+# Edit .env and add your free Gemini API key:
+# GEMINI_API_KEY=your_key_here
 ```
 
 ### 4. Start Minikube
@@ -182,7 +183,7 @@ minikube start
 ```bash
 helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
 helm repo update
-helm install prometheus prometheus-community/kube-prometheus-stack
+helm install prometheus prometheus-community/kube-prometheus-stack --namespace monitoring --create-namespace
 ```
 
 ### 6. Deploy the leaky pod
@@ -200,8 +201,8 @@ uvicorn backend.main:app --reload --port 8000
 ### 8. Open the dashboard
 
 ```bash
+# Just open it manually in Chrome
 open frontend/index.html
-# Or just open it manually in Chrome
 ```
 
 ---
@@ -222,8 +223,6 @@ curl -X POST http://localhost:8000/trigger-fake-alert \
   }'
 ```
 
-Then open `frontend/index.html` to see the full diagnosis + approval flow.
-
 ```bash
 # Trigger a fake prediction alert (before crash)
 curl -X POST http://localhost:8000/trigger-fake-prediction \
@@ -234,6 +233,32 @@ curl -X POST http://localhost:8000/trigger-fake-prediction \
     "memory_readings": [120, 145, 178, 210, 255, 301, 355, 410],
     "memory_limit_mb": 512
   }'
+```
+
+---
+
+## 🔌 Infrastructure API (Person A)
+
+The infrastructure exposes its own FastAPI server for direct K8s operations:
+
+```bash
+python -m uvicorn infrastructure.api:app --reload --port 8001
+```
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/health` | GET | Confirms the API is running |
+| `/system-status` | GET | Returns current pod health — phase, last_reason, restart_count |
+| `/execute` | POST | Restarts a pod directly by name |
+
+**K8s Executor functions available for import:**
+```python
+from infrastructure.k8s_executor import restart_pod, get_pod_status, get_pod_logs, list_pods
+
+get_pod_status(pod_name, namespace)   # Returns phase, last_reason, restart_count
+restart_pod(pod_name, namespace)      # Deletes pod — K8s recreates it fresh
+get_pod_logs(pod_name, namespace)     # Returns last 50 log lines
+list_pods(namespace)                  # Returns all pods with health summary
 ```
 
 ---
@@ -324,7 +349,7 @@ At 95%+ confidence, the fix is suggested instantly with a green **Memory Hit** b
 - Only **pre-validated kubectl commands** are ever executed — no arbitrary code
 - Every action is **fully logged** with timestamp, command, pod name, and outcome
 - A **read-only diagnostic mode** is available — diagnose without any execution permissions
-- The LLM only outputs structured JSON — **Function Calling prevents hallucinated commands**
+- The LLM only outputs structured JSON — **prevents hallucinated commands**
 
 ---
 
@@ -355,6 +380,26 @@ pytest tests/test_memory.py -v
 
 ---
 
+## 🔧 Troubleshooting
+
+**Minikube won't start**  
+Make sure Docker Desktop is fully running first, then retry `minikube start --driver=docker`.
+
+**Pod not found error from /execute**  
+The pod is in CrashLoopBackOff with a long backoff delay. Delete and redeploy:
+```bash
+kubectl delete pod leaky-pod
+kubectl apply -f infrastructure/leak-pod.yaml
+```
+
+**uvicorn not recognized on Windows**  
+Use `python -m uvicorn` instead of just `uvicorn`.
+
+**Prometheus pods stuck in ContainerCreating**  
+Wait 3-5 minutes — they're pulling Docker images. Run `kubectl --namespace monitoring get pods -w` to watch progress.
+
+---
+
 ## 🗺️ Roadmap
 
 - [ ] AWS CloudWatch + Azure Monitor support
@@ -364,8 +409,6 @@ pytest tests/test_memory.py -v
 - [ ] Predictive model trained on historical incident data
 
 ---
-
-
 
 ## 📄 License
 
