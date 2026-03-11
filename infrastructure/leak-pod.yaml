@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: leaky-pod
+  namespace: default
+  labels:
+    app: leaky-pod
+spec:
+  containers:
+  - name: leaky-container
+    image: python:3.11-slim
+    command: ["python", "-c"]
+    args:
+      - |
+        import time
+        leaked = []
+        while True:
+            leaked.append(" " * (5 * 1024 * 1024))
+            print(f"Leaked: {len(leaked)*5} MB")
+            time.sleep(1)
+    resources:
+      limits:
+        memory: "100Mi"
+      requests:
+        memory: "10Mi"
+  restartPolicy: Always
