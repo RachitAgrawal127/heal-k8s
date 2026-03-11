@@ -1,10 +1,10 @@
 """
 Heal-K8s Backend — FastAPI Application
-Person B — Day 1: Core endpoints + mock implementations
+Person B — Backend Lead
 
 All API contract endpoints are defined here.
-Mock functions are used for Person A (k8s executor) and Person D (memory)
-until Integration Day (Day 5).
+Person A's infrastructure.k8s_executor is now wired in (real K8s execution).
+Person D's memory module is still mocked — will be replaced on Integration Day.
 """
 
 from fastapi import FastAPI, HTTPException
@@ -16,21 +16,28 @@ import time
 from backend.predictor import PredictiveEngine
 from backend.signature_engine import SignatureEngine
 
-# ──────────────────────────────────────────────
-# MOCK — replace Day 5 with: from infrastructure.k8s_executor import restart_pod
-def restart_pod(pod_name: str, namespace: str) -> dict:
-    """Mock K8s executor — returns fake success."""
-    return {"status": "mock_success", "message": f"Mock restart of {pod_name} in {namespace}"}
+# ── Person A's real K8s executor (wired in — no longer a mock) ──
+try:
+    from infrastructure.k8s_executor import restart_pod, get_pod_logs, get_pod_status
+    K8S_AVAILABLE = True
+except Exception:
+    # Fallback if Minikube is not running (e.g. during unit tests)
+    K8S_AVAILABLE = False
+    def restart_pod(pod_name: str, namespace: str = "default") -> dict:
+        return {"status": "mock_success", "message": f"K8s not available — mock restart of {pod_name}"}
+    def get_pod_logs(pod_name: str, namespace: str = "default", tail: int = 50) -> str:
+        return "K8s not available — no real logs"
+    def get_pod_status(pod_name: str, namespace: str = "default") -> dict:
+        return {"phase": "Unknown", "last_reason": None, "restart_count": 0}
 
-# MOCK — replace Day 5 with: from memory.memory import lookup_pattern, store_outcome
+# ── MOCK — replace Integration Day with: from memory.memory import lookup_pattern, store_outcome ──
 def lookup_pattern(failure_type: str) -> Optional[dict]:
-    """Mock memory lookup — returns None (no memory yet)."""
+    """Mock memory lookup — returns None (no memory yet). Person D replaces this."""
     return None
 
 def store_outcome(failure_type: str, fix: str, success: bool) -> None:
-    """Mock memory store — does nothing."""
+    """Mock memory store — does nothing. Person D replaces this."""
     pass
-# ──────────────────────────────────────────────
 
 app = FastAPI(
     title="Heal-K8s",
@@ -200,6 +207,7 @@ def execute_command(payload: ExecutePayload):
     """
     Execute an approved kubectl command.
     Person C's Approve button calls this.
+    Uses Person A's real restart_pod() from infrastructure.k8s_executor.
     """
     # Safety: only allow whitelisted command prefixes
     allowed_prefixes = ["kubectl delete pod", "kubectl rollout restart", "kubectl scale"]
@@ -209,19 +217,39 @@ def execute_command(payload: ExecutePayload):
             detail=f"Command not allowed. Must start with one of: {allowed_prefixes}",
         )
 
-    # MOCK — replace Day 5 with actual K8s executor call
-    # For now, extract pod name and namespace from the command
-    result = restart_pod("mock-pod", "default")
+    # Parse pod name and namespace from the kubectl command string
+    # Expected format: "kubectl delete pod <pod-name> -n <namespace>"
+    pod_name = "leaky-pod"  # safe default
+    namespace = "default"
+    try:
+        parts = payload.kubectl_command.split()
+        if "-n" in parts:
+            namespace = parts[parts.index("-n") + 1]
+        # pod name is the token after "pod" keyword
+        if "pod" in parts:
+            pod_name = parts[parts.index("pod") + 1]
+    except (ValueError, IndexError):
+        pass  # use defaults if parsing fails
 
-    # Store outcome in memory
+    # Call Person A's real K8s executor
+    # Gracefully handles the case when Minikube is not running
+    try:
+        result = restart_pod(pod_name, namespace)
+    except Exception as e:
+        result = {
+            "status": "k8s_unavailable",
+            "message": f"Kubernetes not reachable — is Minikube running? Error: {str(e)[:80]}",
+        }
+
+    # Store outcome in memory (Person D's module — currently mocked)
     if current_state["diagnosis"]:
         store_outcome(
             failure_type=current_state.get("badge_type", "unknown"),
             fix=payload.kubectl_command,
-            success=True,
+            success=result.get("status") == "success",
         )
 
-    # Reset state after successful execution
+    # Reset state after execution
     _update_state(
         pod_status="Healthy",
         memory_readings=[],
@@ -233,7 +261,7 @@ def execute_command(payload: ExecutePayload):
         memory_hit=False,
     )
 
-    return {"status": "executed", "command": payload.kubectl_command, "result": result}
+    return {"status": "executed", "command": payload.kubectl_command, "result": result, "k8s_available": K8S_AVAILABLE}
 
 
 @app.get("/incident-history")
