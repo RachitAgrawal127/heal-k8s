@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Heal-K8s — Self-Healing Kubernetes Dashboard</title>
+  <meta name="description" content="Predictive self-healing Kubernetes agent dashboard with real-time OOM detection and auto-remediation." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- ═══════════════ HEADER BAR ═══════════════ -->
+  <header class="header">
+    <div class="header-left">
+      <h1 class="logo">
+        <span class="logo-icon">⎈</span> Heal-K8s
+      </h1>
+      <span class="version-tag">v0.1.0</span>
+    </div>
+    <div class="header-right">
+      <span id="mock-indicator" class="mock-badge">MOCK MODE</span>
+      <span id="k8s-indicator" class="k8s-badge">K8s: <span id="k8s-status">Unknown</span></span>
+    </div>
+  </header>
+
+  <!-- ═══════════════ MAIN DASHBOARD GRID ═══════════════ -->
+  <main class="dashboard">
+
+    <!-- ── Row 1: System Status + Memory Graph ── -->
+    <section class="card card-status" id="panel-status">
+      <div class="card-header">
+        <h2>System Status</h2>
+      </div>
+      <div class="card-body status-body">
+        <div class="status-indicator">
+          <span id="status-badge" class="status-badge healthy">Healthy</span>
+        </div>
+        <div class="status-meta">
+          <p class="meta-label">Source</p>
+          <span id="badge-type" class="source-badge">—</span>
+        </div>
+        <div class="status-meta">
+          <p class="meta-label">Memory Hit</p>
+          <span id="memory-hit" class="memory-hit-badge">No</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="card card-chart" id="panel-chart">
+      <div class="card-header">
+        <h2>Memory Usage</h2>
+        <span id="chart-reading" class="chart-reading">— MB</span>
+      </div>
+      <div class="card-body chart-body">
+        <canvas id="memory-chart"></canvas>
+      </div>
+    </section>
+
+    <!-- ── Row 2: Prediction Countdown + Diagnosis ── -->
+    <section class="card card-countdown" id="panel-countdown">
+      <div class="card-header">
+        <h2>OOM Prediction</h2>
+      </div>
+      <div class="card-body countdown-body">
+        <div class="countdown-display">
+          <span id="countdown-value" class="countdown-value">—</span>
+          <span class="countdown-unit">seconds</span>
+        </div>
+        <p class="countdown-label">until predicted OOMKill</p>
+      </div>
+    </section>
+
+    <section class="card card-diagnosis" id="panel-diagnosis">
+      <div class="card-header">
+        <h2>Diagnosis</h2>
+      </div>
+      <div class="card-body">
+        <p id="diagnosis-text" class="diagnosis-text">No active incidents.</p>
+      </div>
+    </section>
+
+    <!-- ── Row 3: Confidence Badge + Approve Fix ── -->
+    <section class="card card-confidence" id="panel-confidence">
+      <div class="card-header">
+        <h2>Confidence</h2>
+      </div>
+      <div class="card-body confidence-body">
+        <div class="confidence-ring-wrapper">
+          <svg class="confidence-ring" viewBox="0 0 120 120">
+            <circle class="confidence-ring-bg" cx="60" cy="60" r="52" />
+            <circle id="confidence-arc" class="confidence-ring-fill" cx="60" cy="60" r="52"
+                    stroke-dasharray="326.73" stroke-dashoffset="326.73" />
+          </svg>
+          <span id="confidence-value" class="confidence-value">—</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="card card-approve" id="panel-approve">
+      <div class="card-header">
+        <h2>Approve Fix</h2>
+      </div>
+      <div class="card-body approve-body">
+        <div class="kubectl-display">
+          <code id="kubectl-cmd" class="kubectl-cmd">No command pending</code>
+        </div>
+        <button id="approve-btn" class="btn-approve" disabled>
+          <span class="btn-icon">⚡</span> Approve & Execute
+        </button>
+        <p id="execute-feedback" class="execute-feedback"></p>
+      </div>
+    </section>
+
+    <!-- ── Row 4: Incident History (full width) ── -->
+    <section class="card card-history" id="panel-history">
+      <div class="card-header">
+        <h2>Incident History</h2>
+        <span id="incident-count" class="incident-count">0 incidents</span>
+      </div>
+      <div class="card-body">
+        <table class="incident-table">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Failure Type</th>
+              <th>Signature</th>
+              <th>Fix Applied</th>
+              <th>Success</th>
+              <th>Confidence</th>
+              <th>Count</th>
+              <th>Last Seen</th>
+            </tr>
+          </thead>
+          <tbody id="incident-table">
+            <tr class="empty-row">
+              <td colspan="8">No incidents recorded.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ═══════════════ SCRIPTS ═══════════════ -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4" defer></script>
+  <script src="app.js" defer></script>
+
+</body>
+</html>
