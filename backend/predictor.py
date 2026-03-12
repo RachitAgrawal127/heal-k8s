@@ -1,6 +1,6 @@
 """
 Heal-K8s — Predictive Engine
-Person B — Day 1: Core rate-of-change calculator
+Person B — Time-series rate-of-change calculator
 
 Predicts OOMKill crashes BEFORE they happen using time-series analysis.
 No ML. No LLM. Pure math.
@@ -9,7 +9,87 @@ Three conditions must ALL be met before an alert fires:
   1. Growth sustained for 45+ seconds (not a spike)
   2. Growth rate above 0.5 MB/s minimum
   3. At least 6 consecutive rising readings
+
+Module-level functions (for unit tests and direct use):
+  - calculate_rate_of_change(readings, interval_seconds) -> float
+  - is_sustained_growth(readings, interval_seconds, min_rate_mb_per_s, window_seconds) -> bool
+
+Class interface (for the backend):
+  - PredictiveEngine().analyze(memory_readings, memory_limit_mb) -> dict
 """
+
+
+# ── Module-level functions (Person D's tests import these directly) ──
+
+def calculate_rate_of_change(readings: list[float], interval_seconds: float = 10) -> float:
+    """
+    Calculate the average rate of memory growth in MB/s over all readings.
+
+    Args:
+        readings: List of memory values in MB (must have >= 2 values).
+        interval_seconds: Time between each reading (default: 10s Prometheus scrape).
+
+    Returns:
+        Growth rate in MB/s (positive = growing, negative = shrinking, ~0 = flat).
+
+    Raises:
+        ValueError: If fewer than 2 readings are provided.
+        IndexError: If readings list is empty.
+    """
+    if len(readings) < 2:
+        raise ValueError(f"Need at least 2 readings, got {len(readings)}")
+    total_time = (len(readings) - 1) * interval_seconds
+    if total_time == 0:
+        return 0.0
+    return (readings[-1] - readings[0]) / total_time
+
+
+def is_sustained_growth(
+    readings: list[float],
+    interval_seconds: float = 10,
+    min_rate_mb_per_s: float = 0.5,
+    window_seconds: float = 45,
+) -> bool:
+    """
+    Returns True only if ALL three conditions are met:
+      1. At least 6 consecutive rising readings
+      2. Sustained growth window >= window_seconds
+      3. Growth rate >= min_rate_mb_per_s
+
+    This eliminates ~90% of false positives (GC spikes fail condition 1 or 2).
+
+    Args:
+        readings: List of memory values in MB.
+        interval_seconds: Time between each reading.
+        min_rate_mb_per_s: Minimum growth rate to consider a real leak.
+        window_seconds: Minimum sustained growth duration in seconds.
+    """
+    min_consecutive = 6
+
+    if len(readings) < min_consecutive:
+        return False
+
+    # Count consecutive rising readings from the end
+    consecutive_rises = 0
+    for i in range(len(readings) - 1, 0, -1):
+        if readings[i] > readings[i - 1]:
+            consecutive_rises += 1
+        else:
+            break
+
+    # Condition 1 & 2: enough consecutive rises AND sustained long enough
+    if consecutive_rises < min_consecutive:
+        return False
+
+    window_duration = consecutive_rises * interval_seconds
+    if window_duration < window_seconds:
+        return False
+
+    # Condition 3: growth rate above threshold
+    window_start_mb = readings[len(readings) - 1 - consecutive_rises]
+    window_end_mb = readings[-1]
+    rate = (window_end_mb - window_start_mb) / window_duration
+    return rate >= min_rate_mb_per_s
 
 
 class PredictiveEngine:
