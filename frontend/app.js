@@ -344,7 +344,7 @@ function updateMemoryChart(state) {
 
   // Update reading display
   const latest = readings[readings.length - 1];
-  DOM.chartReading.textContent = latest ? `${latest} MB` : '— MB';
+  DOM.chartReading.textContent = latest != null ? `${latest} MB` : '— MB';
   DOM.chartReading.style.color = c.border;
 }
 
