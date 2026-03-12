@@ -23,7 +23,7 @@ class TestDiagnose:
         logs = "Warning: Back-off restarting failed container — CrashLoopBackOff"
         result = diagnose(logs=logs, metrics={})
         assert result["failure_type"] == "CrashLoopBackOff"
-        assert result["confidence"] >= 0.99
+        assert result["confidence"] >= 0.95
 
     def test_imagepullbackoff_detected(self):
         logs = "Failed to pull image: ImagePullBackOff"

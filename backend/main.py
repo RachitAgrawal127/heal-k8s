@@ -4,7 +4,7 @@ Person B — Backend Lead
 
 All API contract endpoints are defined here.
 Person A's infrastructure.k8s_executor is now wired in (real K8s execution).
-Person D's memory module is still mocked — will be replaced on Integration Day.
+Person D's memory.memory module is now wired in (real incident memory).
 """
 
 from fastapi import FastAPI, HTTPException
@@ -16,13 +16,10 @@ import time
 from backend.predictor import PredictiveEngine
 from backend.signature_engine import SignatureEngine
 
-# ── Person A's real K8s executor (wired in — no longer a mock) ──
+# ── Person A's real K8s executor (wired in) ──
 try:
     from infrastructure.k8s_executor import restart_pod, get_pod_logs, get_pod_status
-    K8S_AVAILABLE = True
 except Exception:
-    # Fallback if Minikube is not running (e.g. during unit tests)
-    K8S_AVAILABLE = False
     def restart_pod(pod_name: str, namespace: str = "default") -> dict:
         return {"status": "mock_success", "message": f"K8s not available — mock restart of {pod_name}"}
     def get_pod_logs(pod_name: str, namespace: str = "default", tail: int = 50) -> str:
@@ -30,14 +27,16 @@ except Exception:
     def get_pod_status(pod_name: str, namespace: str = "default") -> dict:
         return {"phase": "Unknown", "last_reason": None, "restart_count": 0}
 
-# ── MOCK — replace Integration Day with: from memory.memory import lookup_pattern, store_outcome ──
-def lookup_pattern(failure_type: str) -> Optional[dict]:
-    """Mock memory lookup — returns None (no memory yet). Person D replaces this."""
-    return None
-
-def store_outcome(failure_type: str, fix: str, success: bool) -> None:
-    """Mock memory store — does nothing. Person D replaces this."""
-    pass
+# ── Person D's real memory module (wired in) ──
+try:
+    from memory.memory import lookup_pattern, store_outcome, get_all_incidents
+except Exception:
+    def lookup_pattern(failure_type: str) -> Optional[dict]:
+        return None
+    def store_outcome(failure_type: str, fix: str, success: bool) -> None:
+        pass
+    def get_all_incidents() -> list:
+        return []
 
 app = FastAPI(
     title="Heal-K8s",
@@ -105,48 +104,60 @@ def trigger_alert(payload: AlertPayload):
     """
     Receives a real Prometheus alert webhook (or manual trigger).
     Runs the full diagnosis pipeline:
-      1. Check incident memory for known fix
-      2. Run signature engine for pattern match
-      3. Fall back to LLM if nothing matches
+      1. Check incident memory for known fix (Person D's module)
+      2. Run signature engine for pattern match (Person B)
+      3. Fall back to LLM via Gemini for unknown failures (Person B)
     """
-    # Step 1 — Check memory for known fix
-    memory_result = lookup_pattern(payload.logs)
-    if memory_result and memory_result.get("confidence", 0) >= 0.95:
+    # Step 1 — Check memory for known past fix (Person D)
+    # First run the signature engine to get the failure_type label for the memory lookup
+    sig_result = signature_engine.diagnose(
+        payload.logs, payload.metrics,
+        pod_name=payload.pod_name, namespace=payload.namespace
+    )
+    failure_type = sig_result["failure_type"]  # e.g. "OOMKilled" or "unknown"
+
+    memory_result = lookup_pattern(failure_type)
+    if memory_result and memory_result.get("confidence", 0) >= 0.95 and failure_type != "unknown":
         _update_state(
             pod_status="Warning",
             badge_type="memory_hit",
-            diagnosis=memory_result["diagnosis"],
+            diagnosis=f"Memory hit: {memory_result['fix']} (confidence {memory_result['confidence']:.0%})",
             confidence=memory_result["confidence"],
             kubectl_command=memory_result["fix"],
             memory_hit=True,
         )
         return {"source": "memory", "result": current_state}
 
-    # Step 2 — Signature engine
-    sig_result = signature_engine.diagnose(payload.logs, payload.metrics)
-    if sig_result:
-        kubectl_cmd = f"kubectl delete pod {payload.pod_name} -n {payload.namespace}"
+    # Step 2 — Signature engine matched a known pattern
+    if failure_type != "unknown":
         _update_state(
             pod_status="Warning",
             badge_type="signature",
             diagnosis=sig_result["diagnosis"],
             confidence=sig_result["confidence"],
-            kubectl_command=kubectl_cmd,
+            kubectl_command=sig_result["kubectl_command"],
             memory_hit=False,
         )
         return {"source": "signature", "result": current_state}
 
-    # Step 3 — LLM fallback (Day 3-4, skeleton for now)
-    kubectl_cmd = f"kubectl delete pod {payload.pod_name} -n {payload.namespace}"
+    # Step 3 — Unknown failure → LLM fallback via Gemini
+    from backend.llm_fallback import LLMFallback
+    llm = LLMFallback()
+    llm_result = llm.diagnose(
+        pod_name=payload.pod_name,
+        namespace=payload.namespace,
+        logs=payload.logs,
+        metrics=payload.metrics,
+    )
     _update_state(
         pod_status="Critical",
         badge_type="llm_fallback",
-        diagnosis=f"Unknown failure in pod {payload.pod_name}. LLM analysis pending.",
-        confidence=0.60,
-        kubectl_command=kubectl_cmd,
+        diagnosis=llm_result["diagnosis"],
+        confidence=llm_result["confidence"],
+        kubectl_command=llm_result["kubectl_command"],
         memory_hit=False,
     )
-    return {"source": "llm_fallback_placeholder", "result": current_state}
+    return {"source": "llm_fallback", "result": current_state}
 
 
 @app.post("/trigger-fake-alert")
@@ -268,23 +279,9 @@ def execute_command(payload: ExecutePayload):
 def incident_history():
     """
     Returns past incidents with fix outcomes and confidence scores.
-    Person D builds the real implementation — this is a mock for Day 1.
+    Uses Person D's real get_all_incidents() from memory.memory.
     """
-    # MOCK — replace Day 5 with: from memory.memory import get_history
-    return {
-        "incidents": [
-            {
-                "id": 1,
-                "failure_type": "OOMKilled",
-                "signature_matched": "OOMKilled",
-                "fix_applied": "kubectl delete pod leaky-app-7x -n default",
-                "success": True,
-                "confidence": 0.99,
-                "count": 3,
-                "last_seen": "2025-03-09T03:42:11",
-            }
-        ]
-    }
+    return {"incidents": get_all_incidents()}
 
 
 # ── Internal Helpers ──

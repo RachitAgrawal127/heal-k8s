@@ -66,7 +66,8 @@ def lookup_pattern(failure_type: str) -> Optional[dict]:
 
 
 def store_outcome(failure_type: str, fix: str, success: bool):
-    now = datetime.utcnow().isoformat()
+    import datetime as dt_module
+    now = dt_module.datetime.now(dt_module.UTC).isoformat()
 
     with _get_connection() as conn:
 
