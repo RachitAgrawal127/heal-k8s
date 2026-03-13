@@ -60,6 +60,8 @@ app.add_middleware(
 )
 
 PROMETHEUS_URL = os.getenv("PROMETHEUS_URL", "http://localhost:9090")
+ENABLE_PROMETHEUS_POLLING = os.getenv("ENABLE_PROMETHEUS_POLLING", "false").lower() == "true"
+ENABLE_K8S_EXECUTION = os.getenv("ENABLE_K8S_EXECUTION", "false").lower() == "true"
 pod_memory_history = defaultdict(list)
 MAX_HISTORY_LEN = 30  # Keep last 5 minutes of readings (30 * 10s)
 
@@ -197,7 +199,10 @@ async def prometheus_polling_loop():
 
 @app.on_event("startup")
 async def startup_event():
-    asyncio.create_task(prometheus_polling_loop())
+    if ENABLE_PROMETHEUS_POLLING:
+        asyncio.create_task(prometheus_polling_loop())
+    else:
+        print("Prometheus polling disabled. Set ENABLE_PROMETHEUS_POLLING=true to enable live polling.")
 
 # ── API Endpoints ──
 
@@ -352,15 +357,21 @@ def execute_command(payload: ExecutePayload):
     except (ValueError, IndexError):
         pass  # use defaults if parsing fails
 
+    if not ENABLE_K8S_EXECUTION:
+        result = {
+            "status": "mock_success",
+            "message": "Demo mode: fix approved and simulated successfully.",
+        }
+    else:
     # Call Person A's real K8s executor
     # Gracefully handles the case when Minikube is not running
-    try:
-        result = restart_pod(pod_name, namespace)
-    except Exception as e:
-        result = {
-            "status": "k8s_unavailable",
-            "message": f"Kubernetes not reachable — is Minikube running? Error: {str(e)[:80]}",
-        }
+        try:
+            result = restart_pod(pod_name, namespace)
+        except Exception as e:
+            result = {
+                "status": "k8s_unavailable",
+                "message": f"Kubernetes not reachable — is Minikube running? Error: {str(e)[:80]}",
+            }
 
     # Store outcome in memory (Person D's module)
     # Use failure_type (e.g. "OOMKilled") not badge_type ("signature") so
@@ -380,7 +391,7 @@ def execute_command(payload: ExecutePayload):
         prediction_seconds=None,
         badge_type=None,
         failure_type=None,
-        diagnosis=f"Fix applied: {payload.kubectl_command}",
+        diagnosis=None,
         confidence=None,
         kubectl_command=None,
         memory_hit=False,

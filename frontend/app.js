@@ -96,7 +96,7 @@ let historyController = null;
 
 async function fetchWithTimeout(url, options = {}) {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), CONFIG.FETCH_TIMEOUT_MS);
+  const timeoutId = setTimeout(() => controller.abort('Request timed out'), CONFIG.FETCH_TIMEOUT_MS);
 
   try {
     const res = await fetch(url, { ...options, signal: controller.signal });
@@ -150,7 +150,10 @@ async function executeCommand(cmd) {
     });
   } catch (err) {
     console.error('[API] executeCommand failed:', err);
-    return { status: 'error', result: { status: 'error', message: err.message } };
+    const message = err.name === 'AbortError'
+      ? 'Execution timed out waiting for backend response.'
+      : err.message;
+    return { status: 'error', result: { status: 'error', message } };
   }
 }
 
@@ -203,6 +206,43 @@ const RING_CIRCUMFERENCE = 2 * Math.PI * 52;  // ≈ 326.73
 
 // [FIX-4] Diff-check: skip DOM writes when value hasn't changed
 let prevState = null;
+let countdownDeadlineMs = null;
+let countdownIntervalId = null;
+
+function renderCountdownValue(secs) {
+  DOM.countdownValue.textContent = secs;
+
+  if (secs <= 15) {
+    DOM.countdownValue.className = 'countdown-value critical';
+  } else if (secs <= 60) {
+    DOM.countdownValue.className = 'countdown-value warning';
+  } else {
+    DOM.countdownValue.className = 'countdown-value';
+  }
+}
+
+function clearCountdown() {
+  countdownDeadlineMs = null;
+  DOM.countdownValue.textContent = '—';
+  DOM.countdownValue.className = 'countdown-value';
+}
+
+function tickCountdown() {
+  if (countdownDeadlineMs == null) {
+    return;
+  }
+
+  const remainingSecs = Math.max(0, Math.ceil((countdownDeadlineMs - Date.now()) / 1000));
+  renderCountdownValue(remainingSecs);
+}
+
+function ensureCountdownTicker() {
+  if (countdownIntervalId !== null) {
+    return;
+  }
+
+  countdownIntervalId = setInterval(tickCountdown, 250);
+}
 
 function stateChanged(newState) {
   if (!prevState) return true;
@@ -252,21 +292,19 @@ function updateBadgeType(state) {
 
 function updateCountdown(state) {
   if (!state || state.prediction_seconds == null) {
-    DOM.countdownValue.textContent = '—';
-    DOM.countdownValue.className = 'countdown-value';
+    clearCountdown();
     return;
   }
 
-  const secs = state.prediction_seconds;
-  DOM.countdownValue.textContent = secs;
+  const shouldResetCountdown = !prevState
+    || prevState.badge_type !== state.badge_type
+    || prevState.prediction_seconds !== state.prediction_seconds;
 
-  if (secs <= 15) {
-    DOM.countdownValue.className = 'countdown-value critical';
-  } else if (secs <= 60) {
-    DOM.countdownValue.className = 'countdown-value warning';
-  } else {
-    DOM.countdownValue.className = 'countdown-value';
+  if (shouldResetCountdown) {
+    countdownDeadlineMs = Date.now() + (state.prediction_seconds * 1000);
   }
+
+  tickCountdown();
 }
 
 function updateDiagnosis(state) {
@@ -470,6 +508,7 @@ const memoryChart = new Chart(document.getElementById('memory-chart'), {
 
 // [FIX-5] Execution state flag to prevent poll from re-enabling button mid-execution
 let isExecuting = false;
+let executeFeedbackTimeoutId = null;
 
 // [FIX-10] Polling guard: prevent overlapping async poll cycles
 let isPollingStatus = false;
@@ -477,6 +516,8 @@ let isPollingHistory = false;
 
 // ── Initialize UI state ──
 function initUI() {
+  ensureCountdownTicker();
+
   // Show/hide mock indicator
   if (CONFIG.MOCK_MODE) {
     DOM.mockIndicator.classList.remove('hidden');
@@ -538,6 +579,11 @@ DOM.approveBtn.addEventListener('click', async () => {
   const cmd = DOM.kubectlCmd.textContent;
   if (!cmd || cmd === 'No command pending') return;
 
+  if (executeFeedbackTimeoutId !== null) {
+    clearTimeout(executeFeedbackTimeoutId);
+    executeFeedbackTimeoutId = null;
+  }
+
   // [FIX-5] Set execution flag so poll doesn't re-enable the button
   isExecuting = true;
   DOM.approveBtn.disabled = true;
@@ -547,7 +593,7 @@ DOM.approveBtn.addEventListener('click', async () => {
 
   try {
     const result = await executeCommand(cmd);
-    if (result && result.result && result.result.status === 'success') {
+    if (result && result.result && ['success', 'mock_success'].includes(result.result.status)) {
       DOM.executeFeedback.textContent = `✓ ${result.result.message}`;
       DOM.executeFeedback.className = 'execute-feedback';
     } else {
@@ -563,6 +609,12 @@ DOM.approveBtn.addEventListener('click', async () => {
     DOM.executeFeedback.textContent = `✗ Error: ${err.message}`;
     DOM.executeFeedback.className = 'execute-feedback error';
   }
+
+  executeFeedbackTimeoutId = setTimeout(() => {
+    DOM.executeFeedback.textContent = '';
+    DOM.executeFeedback.className = 'execute-feedback';
+    executeFeedbackTimeoutId = null;
+  }, 1500);
 
   // Re-enable button after a brief delay
   setTimeout(() => {
