@@ -11,7 +11,8 @@ venv/
 
 # Environment variables (never commit secrets)
 .env
-
+.env.*
+*.env*
 # SQLite database (auto-created at runtime)
 *.db
 
