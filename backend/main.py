@@ -174,6 +174,18 @@ async def prometheus_polling_loop():
                                 kubectl_command=kubectl_cmd,
                                 memory_hit=False,
                             )
+                        else:
+                            # [BUGFIX] Push live memory readings to dashboard even when healthy
+                            _update_state(
+                                pod_status="Healthy",
+                                memory_readings=list(pod_memory_history[pod_name]),
+                                prediction_seconds=None,
+                                badge_type=None,
+                                diagnosis="System nominal. Monitoring memory.",
+                                confidence=None,
+                                kubectl_command=None,
+                                memory_hit=False,
+                            )
                 
             except Exception as e:
                 print(f"[Prometheus Polling] Error: {e}")
