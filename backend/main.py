@@ -12,6 +12,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
 import time
+import asyncio
+import httpx
+import os
+from collections import defaultdict
 
 from backend.predictor import PredictiveEngine
 from backend.signature_engine import SignatureEngine
@@ -55,6 +59,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+PROMETHEUS_URL = os.getenv("PROMETHEUS_URL", "http://localhost:9090")
+pod_memory_history = defaultdict(list)
+MAX_HISTORY_LEN = 30  # Keep last 5 minutes of readings (30 * 10s)
+
+
 # Initialize engines
 predictor = PredictiveEngine()
 signature_engine = SignatureEngine()
@@ -93,8 +102,91 @@ class ExecutePayload(BaseModel):
     kubectl_command: str
 
 
-# ── API Endpoints ──
+# ── Background Daemon ──
 
+async def prometheus_polling_loop():
+    """
+    Background worker that polls Prometheus every 10 seconds for pod memory usage.
+    Feeds data into the Predictive Engine to actually predict crashes in real-time.
+    """
+    print(f"Starting Prometheus polling loop against {PROMETHEUS_URL}...")
+    
+    # Wait a bit on startup to let everything initialize
+    await asyncio.sleep(5)
+    
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        while True:
+            try:
+                # Query 1: Container memory working set (actual usage)
+                query_usage = 'sum(container_memory_working_set_bytes{namespace="default", pod!=""}) by (pod) / 1024 / 1024'
+                res_usage = await client.get(f"{PROMETHEUS_URL}/api/v1/query", params={"query": query_usage})
+                res_usage.raise_for_status()
+                usage_data = res_usage.json()
+
+                # Query 2: Container memory limit
+                query_limits = 'sum(kube_pod_container_resource_limits_memory_bytes{namespace="default", pod!=""}) by (pod) / 1024 / 1024'
+                res_limits = await client.get(f"{PROMETHEUS_URL}/api/v1/query", params={"query": query_limits})
+                # It's okay if limits fail or return nothing, we will default to 512MB
+                limit_data = res_limits.json() if res_limits.status_code == 200 else {}
+                
+                # Parse limits into a quick lookup dictionary
+                limits_lookup = {}
+                if 'data' in limit_data and 'result' in limit_data['data']:
+                    for item in limit_data['data']['result']:
+                        pod = item['metric'].get('pod')
+                        val = float(item['value'][1])
+                        if pod and val > 0:
+                            limits_lookup[pod] = val
+
+                # Process usage data
+                if 'data' in usage_data and 'result' in usage_data['data']:
+                    for item in usage_data['data']['result']:
+                        pod_name = item['metric'].get('pod')
+                        if not pod_name:
+                            continue
+                            
+                        mem_mb = float(item['value'][1])
+                        limit_mb = limits_lookup.get(pod_name, 512.0)  # default to 512MB if unknown
+
+                        # Append to history
+                        pod_memory_history[pod_name].append(mem_mb)
+                        if len(pod_memory_history[pod_name]) > MAX_HISTORY_LEN:
+                            pod_memory_history[pod_name].pop(0)
+
+                        # Skip analysis if we don't have enough data points yet
+                        if len(pod_memory_history[pod_name]) < predictor.MIN_CONSECUTIVE_RISES:
+                            continue
+
+                        # Run Predictive Engine
+                        result = predictor.analyze(pod_memory_history[pod_name], limit_mb)
+                        
+                        if result["alert"]:
+                            print(f"[PREDICTION ALERT] Pod {pod_name} is leaking: {result['diagnosis']}")
+                            kubectl_cmd = f"kubectl delete pod {pod_name} -n default"
+                            # Update system state to instantly push alert to frontend dashboard
+                            _update_state(
+                                pod_status="Warning",
+                                memory_readings=list(pod_memory_history[pod_name]),
+                                prediction_seconds=result["predicted_seconds_to_oom"],
+                                badge_type="prediction",
+                                diagnosis=result["diagnosis"],
+                                confidence=result["confidence"],
+                                kubectl_command=kubectl_cmd,
+                                memory_hit=False,
+                            )
+                
+            except Exception as e:
+                print(f"[Prometheus Polling] Error: {e}")
+            
+            # Prometheus scrape interval is 10s by default
+            await asyncio.sleep(predictor.SAMPLE_INTERVAL_SECONDS)
+
+
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(prometheus_polling_loop())
+
+# ── API Endpoints ──
 
 @app.get("/")
 def root():
