@@ -74,6 +74,7 @@ current_state = {
     "memory_readings": [],
     "prediction_seconds": None,
     "badge_type": None,
+    "failure_type": None,   # real failure label (OOMKilled, CrashLoopBackOff…) used for memory lookup
     "diagnosis": None,
     "confidence": None,
     "kubectl_command": None,
@@ -227,6 +228,7 @@ def trigger_alert(payload: AlertPayload):
         _update_state(
             pod_status="Warning",
             badge_type="memory_hit",
+            failure_type=failure_type,
             diagnosis=f"Memory hit: {memory_result['fix']} (confidence {memory_result['confidence']:.0%})",
             confidence=memory_result["confidence"],
             kubectl_command=memory_result["fix"],
@@ -239,6 +241,7 @@ def trigger_alert(payload: AlertPayload):
         _update_state(
             pod_status="Warning",
             badge_type="signature",
+            failure_type=failure_type,
             diagnosis=sig_result["diagnosis"],
             confidence=sig_result["confidence"],
             kubectl_command=sig_result["kubectl_command"],
@@ -258,6 +261,7 @@ def trigger_alert(payload: AlertPayload):
     _update_state(
         pod_status="Critical",
         badge_type="llm_fallback",
+        failure_type=llm_result.get("failure_type", "unknown"),
         diagnosis=llm_result["diagnosis"],
         confidence=llm_result["confidence"],
         kubectl_command=llm_result["kubectl_command"],
@@ -359,11 +363,14 @@ def execute_command(payload: ExecutePayload):
         }
 
     # Store outcome in memory (Person D's module)
+    # Use failure_type (e.g. "OOMKilled") not badge_type ("signature") so
+    # lookup_pattern() can find it on the next identical incident.
     if current_state["diagnosis"]:
         store_outcome(
-            failure_type=current_state.get("badge_type") or "unknown",
+            failure_type=current_state.get("failure_type") or current_state.get("badge_type") or "unknown",
             fix=payload.kubectl_command,
-            success=result.get("status") == "success",
+            # mock_success counts as success for memory learning (no Minikube demo mode)
+            success=result.get("status") in ("success", "mock_success"),
         )
 
     # Reset state after execution
@@ -372,6 +379,7 @@ def execute_command(payload: ExecutePayload):
         memory_readings=[],
         prediction_seconds=None,
         badge_type=None,
+        failure_type=None,
         diagnosis=f"Fix applied: {payload.kubectl_command}",
         confidence=None,
         kubectl_command=None,

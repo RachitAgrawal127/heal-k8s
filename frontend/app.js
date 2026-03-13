@@ -55,22 +55,22 @@ const MOCK_INCIDENTS = [
   {
     id: 1,
     failure_type: 'OOMKilled',
-    signature_matched: 'OOMKilled',
-    fix_applied: 'kubectl delete pod leaky-app-7x9k2 -n default',
-    success: true,
+    fix: 'kubectl delete pod leaky-app-7x9k2 -n default',
     confidence: 0.99,
-    count: 3,
+    success_count: 3,
+    failure_count: 0,
     last_seen: '2025-03-09T03:42:11',
+    created_at: '2025-03-07T10:00:00',
   },
   {
     id: 2,
     failure_type: 'CrashLoopBackOff',
-    signature_matched: 'CrashLoopBackOff',
-    fix_applied: 'kubectl delete pod api-server-3b2m1 -n production',
-    success: true,
+    fix: 'kubectl delete pod api-server-3b2m1 -n production',
     confidence: 0.95,
-    count: 1,
+    success_count: 1,
+    failure_count: 0,
     last_seen: '2025-03-08T14:18:33',
+    created_at: '2025-03-08T14:00:00',
   },
 ];
 
@@ -358,7 +358,7 @@ function escapeHtml(str) {
 
 function updateIncidentTable(incidents) {
   if (!incidents || incidents.length === 0) {
-    DOM.incidentTable.innerHTML = '<tr class="empty-row"><td colspan="8">No incidents recorded.</td></tr>';
+    DOM.incidentTable.innerHTML = '<tr class="empty-row"><td colspan="7">No incidents recorded.</td></tr>';
     DOM.incidentCount.textContent = '0 incidents';
     return;
   }
@@ -366,18 +366,22 @@ function updateIncidentTable(incidents) {
   DOM.incidentCount.textContent = `${incidents.length} incident${incidents.length !== 1 ? 's' : ''}`;
 
   // [FIX-6] Use escapeHtml on all backend-sourced strings to prevent XSS
-  DOM.incidentTable.innerHTML = incidents.map(inc => `
+  // Fields match real backend schema: fix, success_count, failure_count (not fix_applied/success/count/signature_matched)
+  DOM.incidentTable.innerHTML = incidents.map(inc => {
+    const total = (inc.success_count || 0) + (inc.failure_count || 0);
+    const majority = (inc.success_count || 0) >= (inc.failure_count || 0);
+    return `
     <tr>
       <td class="mono">${escapeHtml(String(inc.id))}</td>
       <td>${escapeHtml(inc.failure_type)}</td>
-      <td>${escapeHtml(inc.signature_matched)}</td>
-      <td class="mono">${escapeHtml(truncateCmd(inc.fix_applied))}</td>
-      <td><span class="${inc.success ? 'success-yes' : 'success-no'}">${inc.success ? '✓ Yes' : '✗ No'}</span></td>
+      <td class="mono">${escapeHtml(truncateCmd(inc.fix))}</td>
+      <td><span class="${majority ? 'success-yes' : 'success-no'}">${inc.success_count || 0}/${total}</span></td>
       <td class="mono">${inc.confidence != null ? Math.round(inc.confidence * 100) + '%' : '—'}</td>
-      <td class="mono">${escapeHtml(String(inc.count))}</td>
+      <td class="mono">${escapeHtml(String(total))}</td>
       <td class="mono">${formatTime(inc.last_seen)}</td>
     </tr>
-  `).join('');
+  `;
+  }).join('');
 }
 
 // ── Helpers ──

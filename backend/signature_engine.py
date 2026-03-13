@@ -48,7 +48,9 @@ FAILURE_SIGNATURES = {
             r"image.*not found",
         ],
         "confidence": 0.99,
-        "diagnosis": "Container image could not be pulled — check image name and registry access.",
+        "diagnosis": "Container image could not be pulled — verify the image name, tag, and registry credentials. "
+                     "Deleting the pod re-triggers the pull but will NOT resolve the root cause until "
+                     "the image reference in the pod spec is corrected.",
         "fix_hint": "check_image",
     },
     "PodPending": {
