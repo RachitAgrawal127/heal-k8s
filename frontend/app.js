@@ -9,7 +9,7 @@ const CONFIG = {
   API_BASE: 'http://localhost:8000',
   POLL_INTERVAL_MS: 2000,
   HISTORY_POLL_MS: 10000,
-  MOCK_MODE: true,   // true = offline dev mode, false = hit real backend
+  MOCK_MODE: false,   // true = offline dev mode, false = hit real backend
   FETCH_TIMEOUT_MS: 5000,  // [FIX-1] abort fetch after 5s to prevent stale connections
 };
 

@@ -19,7 +19,9 @@ from backend.signature_engine import SignatureEngine
 # ── Person A's real K8s executor (wired in) ──
 try:
     from infrastructure.k8s_executor import restart_pod, get_pod_logs, get_pod_status
+    K8S_AVAILABLE = True
 except Exception:
+    K8S_AVAILABLE = False
     def restart_pod(pod_name: str, namespace: str = "default") -> dict:
         return {"status": "mock_success", "message": f"K8s not available — mock restart of {pod_name}"}
     def get_pod_logs(pod_name: str, namespace: str = "default", tail: int = 50) -> str:
@@ -252,10 +254,10 @@ def execute_command(payload: ExecutePayload):
             "message": f"Kubernetes not reachable — is Minikube running? Error: {str(e)[:80]}",
         }
 
-    # Store outcome in memory (Person D's module — currently mocked)
+    # Store outcome in memory (Person D's module)
     if current_state["diagnosis"]:
         store_outcome(
-            failure_type=current_state.get("badge_type", "unknown"),
+            failure_type=current_state.get("badge_type") or "unknown",
             fix=payload.kubectl_command,
             success=result.get("status") == "success",
         )
