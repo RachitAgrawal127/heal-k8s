@@ -1,6 +1,6 @@
 """
 Heal-K8s — Predictive Engine
-Person B — Time-series rate-of-change calculator
+Time-series rate-of-change calculator
 
 Predicts OOMKill crashes BEFORE they happen using time-series analysis.
 No ML. No LLM. Pure math.
@@ -19,7 +19,7 @@ Class interface (for the backend):
 """
 
 
-# ── Module-level functions (Person D's tests import these directly) ──
+# ── Module-level functions ──
 
 def calculate_rate_of_change(readings: list[float], interval_seconds: float = 10) -> float:
     """

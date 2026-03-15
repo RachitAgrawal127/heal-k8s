@@ -4,13 +4,12 @@ from infrastructure.k8s_executor import restart_pod, get_pod_status, list_pods
 
 app = FastAPI()
 
-# This defines the shape of the request body for /execute
 class ExecuteRequest(BaseModel):
     pod_name: str
     namespace: str = "default"
 
 class ExecuteCommand(BaseModel):
-    kubectl_command: str  # e.g. "kubectl delete pod leaky-pod -n default"
+    kubectl_command: str  # Example: "kubectl delete pod leaky-pod -n default"
 
 @app.get("/health")
 def health():
@@ -20,7 +19,7 @@ def health():
 @app.get("/system-status")
 def system_status():
     """
-    Person C polls this every 2 seconds.
+    Dashboard polls this periodically.
     Returns current pod health for the dashboard.
     """
     status = get_pod_status("leaky-pod")
@@ -36,8 +35,7 @@ def system_status():
 @app.post("/execute")
 def execute(request: ExecuteRequest):
     """
-    Person C's Approve button calls this.
-    Receives pod name, calls restart_pod(), returns result.
+    Restart a pod through the Kubernetes executor.
     """
     result = restart_pod(
         pod_name=request.pod_name,

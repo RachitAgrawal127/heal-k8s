@@ -2,7 +2,7 @@ import os
 import sys
 import pytest
 
-# Make sure the project root is on the path
+# Add the project root to the import path for tests.
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from memory.memory import (
@@ -17,8 +17,6 @@ from memory.memory import (
 import sqlite3
 
 
-# ─── Fixtures ────────────────────────────────────────────────────────────────
-
 @pytest.fixture(autouse=True)
 def clean_db():
     """Wipe the incidents table before every test for isolation."""
@@ -27,13 +25,10 @@ def clean_db():
         conn.execute("DELETE FROM incidents")
         conn.commit()
     yield
-    # Cleanup after test too
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute("DELETE FROM incidents")
         conn.commit()
 
-
-# ─── lookup_pattern ───────────────────────────────────────────────────────────
 
 class TestLookupPattern:
     def test_returns_none_for_unknown_failure(self):
@@ -56,8 +51,6 @@ class TestLookupPattern:
     def test_returns_none_for_empty_db(self):
         assert lookup_pattern("OOMKilled") is None
 
-
-# ─── store_outcome ────────────────────────────────────────────────────────────
 
 class TestStoreOutcome:
     def test_new_success_creates_record(self):
@@ -84,7 +77,6 @@ class TestStoreOutcome:
         store_outcome("CrashLoopBackOff", "kubectl delete pod myapp-xyz", success=True)
         store_outcome("CrashLoopBackOff", "kubectl delete pod myapp-xyz", success=False)
         result = lookup_pattern("CrashLoopBackOff")
-        # 2 successes / 3 total = ~0.666
         assert 0.60 <= result["confidence"] <= 0.70
 
     def test_failure_updates_failure_count(self):
@@ -106,11 +98,9 @@ class TestStoreOutcome:
         assert lookup_pattern("CrashLoopBackOff")["fix"] == "fix-b"
 
 
-# ─── update_confidence ────────────────────────────────────────────────────────
-
 class TestUpdateConfidence:
     def test_confidence_is_ratio_of_successes(self):
-        # Insert raw record manually to test update_confidence in isolation
+        # Insert a record manually to test update_confidence in isolation.
         with sqlite3.connect(DB_PATH) as conn:
             conn.execute("""
                 INSERT INTO incidents (failure_type, fix, success_count, failure_count, confidence)
@@ -118,7 +108,7 @@ class TestUpdateConfidence:
             """)
             conn.commit()
 
-        update_confidence("TestFailure", success=True)  # Now 5/6
+        update_confidence("TestFailure", success=True)
         result = lookup_pattern("TestFailure")
         expected = 5 / 6
         assert abs(result["confidence"] - expected) < 0.02
@@ -136,8 +126,6 @@ class TestUpdateConfidence:
         result = lookup_pattern("GoodFailure")
         assert result["confidence"] == 1.0
 
-
-# ─── get_all_incidents ────────────────────────────────────────────────────────
 
 class TestGetAllIncidents:
     def test_returns_empty_list_when_no_incidents(self):
@@ -164,5 +152,4 @@ class TestGetAllIncidents:
         store_outcome("OOMKilled", "fix-a", success=True)
         store_outcome("CrashLoopBackOff", "fix-b", success=True)
         result = get_all_incidents()
-        # Most recently inserted should be first
         assert result[0]["failure_type"] == "CrashLoopBackOff"

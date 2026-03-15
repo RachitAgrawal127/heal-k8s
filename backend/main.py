@@ -1,11 +1,3 @@
-"""
-Heal-K8s Backend — FastAPI Application
-Person B — Backend Lead
-
-All API contract endpoints are defined here.
-Person A's infrastructure.k8s_executor is now wired in (real K8s execution).
-Person D's memory.memory module is now wired in (real incident memory).
-"""
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -20,7 +12,7 @@ from collections import defaultdict
 from backend.predictor import PredictiveEngine
 from backend.signature_engine import SignatureEngine
 
-# ── Person A's real K8s executor (wired in) ──
+# ── Kubernetes executor ──
 try:
     from infrastructure.k8s_executor import restart_pod, get_pod_logs, get_pod_status
     K8S_AVAILABLE = True
@@ -33,7 +25,7 @@ except Exception:
     def get_pod_status(pod_name: str, namespace: str = "default") -> dict:
         return {"phase": "Unknown", "last_reason": None, "restart_count": 0}
 
-# ── Person D's real memory module (wired in) ──
+# ── Incident memory module ──
 try:
     from memory.memory import lookup_pattern, store_outcome, get_all_incidents
 except Exception:
@@ -50,7 +42,7 @@ app = FastAPI(
     version="0.1.0",
 )
 
-# Allow frontend (index.html opened via file://) to call the API
+# Allow the static dashboard to call the API when opened directly in the browser.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -63,20 +55,19 @@ PROMETHEUS_URL = os.getenv("PROMETHEUS_URL", "http://localhost:9090")
 ENABLE_PROMETHEUS_POLLING = os.getenv("ENABLE_PROMETHEUS_POLLING", "false").lower() == "true"
 ENABLE_K8S_EXECUTION = os.getenv("ENABLE_K8S_EXECUTION", "false").lower() == "true"
 pod_memory_history = defaultdict(list)
-MAX_HISTORY_LEN = 30  # Keep last 5 minutes of readings (30 * 10s)
+MAX_HISTORY_LEN = 30  # Keep the most recent five minutes of samples.
 
 
-# Initialize engines
 predictor = PredictiveEngine()
 signature_engine = SignatureEngine()
 
-# ── Shared in-memory state (replaced by real K8s polling later) ──
+# ── Shared in-memory dashboard state ──
 current_state = {
     "pod_status": "Healthy",
     "memory_readings": [],
     "prediction_seconds": None,
     "badge_type": None,
-    "failure_type": None,   # real failure label (OOMKilled, CrashLoopBackOff…) used for memory lookup
+    "failure_type": None,   # Canonical failure label used for memory lookups.
     "diagnosis": None,
     "confidence": None,
     "kubectl_command": None,
@@ -84,55 +75,54 @@ current_state = {
 }
 
 
-# ── Request / Response Models ──
+# ── Request / response models ──
 
 
 class AlertPayload(BaseModel):
     pod_name: str
     namespace: str = "default"
     logs: str
-    metrics: dict  # e.g. {"memory_usage": 0.95, "restart_count": 0}
+    metrics: dict  # Example: {"memory_usage": 0.95, "restart_count": 0}
 
 
 class PredictionPayload(BaseModel):
     pod_name: str
     namespace: str = "default"
-    memory_readings: list[float]  # e.g. [120, 145, 178, 210, 255, 301, 355, 410]
-    memory_limit_mb: float  # e.g. 512
+    memory_readings: list[float]  # Example: [120, 145, 178, 210, 255, 301, 355, 410]
+    memory_limit_mb: float  # Example: 512
 
 
 class ExecutePayload(BaseModel):
     kubectl_command: str
 
 
-# ── Background Daemon ──
+# ── Background polling loop ──
 
 async def prometheus_polling_loop():
     """
-    Background worker that polls Prometheus every 10 seconds for pod memory usage.
-    Feeds data into the Predictive Engine to actually predict crashes in real-time.
+    Poll Prometheus on a fixed interval and feed samples into the predictive engine.
     """
     print(f"Starting Prometheus polling loop against {PROMETHEUS_URL}...")
-    
-    # Wait a bit on startup to let everything initialize
+
+    # Give the application a brief startup window before polling begins.
     await asyncio.sleep(5)
     
     async with httpx.AsyncClient(timeout=5.0) as client:
         while True:
             try:
-                # Query 1: Container memory working set (actual usage)
+                # Query current per-pod memory usage in megabytes.
                 query_usage = 'sum(container_memory_working_set_bytes{namespace="default", pod!=""}) by (pod) / 1024 / 1024'
                 res_usage = await client.get(f"{PROMETHEUS_URL}/api/v1/query", params={"query": query_usage})
                 res_usage.raise_for_status()
                 usage_data = res_usage.json()
 
-                # Query 2: Container memory limit
+                # Query configured per-pod memory limits in megabytes.
                 query_limits = 'sum(kube_pod_container_resource_limits_memory_bytes{namespace="default", pod!=""}) by (pod) / 1024 / 1024'
                 res_limits = await client.get(f"{PROMETHEUS_URL}/api/v1/query", params={"query": query_limits})
-                # It's okay if limits fail or return nothing, we will default to 512MB
+                # Fall back to a default limit when no explicit limit is available.
                 limit_data = res_limits.json() if res_limits.status_code == 200 else {}
-                
-                # Parse limits into a quick lookup dictionary
+
+                # Build a pod-to-limit lookup for the current polling interval.
                 limits_lookup = {}
                 if 'data' in limit_data and 'result' in limit_data['data']:
                     for item in limit_data['data']['result']:
@@ -141,7 +131,7 @@ async def prometheus_polling_loop():
                         if pod and val > 0:
                             limits_lookup[pod] = val
 
-                # Process usage data
+                # Process memory samples for each pod returned by Prometheus.
                 if 'data' in usage_data and 'result' in usage_data['data']:
                     for item in usage_data['data']['result']:
                         pod_name = item['metric'].get('pod')
@@ -149,24 +139,24 @@ async def prometheus_polling_loop():
                             continue
                             
                         mem_mb = float(item['value'][1])
-                        limit_mb = limits_lookup.get(pod_name, 512.0)  # default to 512MB if unknown
+                        limit_mb = limits_lookup.get(pod_name, 512.0)
 
-                        # Append to history
+                        # Append the latest sample to the rolling history.
                         pod_memory_history[pod_name].append(mem_mb)
                         if len(pod_memory_history[pod_name]) > MAX_HISTORY_LEN:
                             pod_memory_history[pod_name].pop(0)
 
-                        # Skip analysis if we don't have enough data points yet
+                        # Wait until the rolling window is large enough for analysis.
                         if len(pod_memory_history[pod_name]) < predictor.MIN_CONSECUTIVE_RISES:
                             continue
 
-                        # Run Predictive Engine
+                        # Run the predictive engine on the current rolling window.
                         result = predictor.analyze(pod_memory_history[pod_name], limit_mb)
                         
                         if result["alert"]:
                             print(f"[PREDICTION ALERT] Pod {pod_name} is leaking: {result['diagnosis']}")
                             kubectl_cmd = f"kubectl delete pod {pod_name} -n default"
-                            # Update system state to instantly push alert to frontend dashboard
+                            # Update dashboard state with the predicted incident.
                             _update_state(
                                 pod_status="Warning",
                                 memory_readings=list(pod_memory_history[pod_name]),
@@ -178,7 +168,7 @@ async def prometheus_polling_loop():
                                 memory_hit=False,
                             )
                         else:
-                            # [BUGFIX] Push live memory readings to dashboard even when healthy
+                            # Keep live memory readings visible during nominal operation.
                             _update_state(
                                 pod_status="Healthy",
                                 memory_readings=list(pod_memory_history[pod_name]),
@@ -193,7 +183,7 @@ async def prometheus_polling_loop():
             except Exception as e:
                 print(f"[Prometheus Polling] Error: {e}")
             
-            # Prometheus scrape interval is 10s by default
+            # Match the polling interval to the configured sample interval.
             await asyncio.sleep(predictor.SAMPLE_INTERVAL_SECONDS)
 
 
@@ -204,7 +194,7 @@ async def startup_event():
     else:
         print("Prometheus polling disabled. Set ENABLE_PROMETHEUS_POLLING=true to enable live polling.")
 
-# ── API Endpoints ──
+# ── API endpoints ──
 
 @app.get("/")
 def root():
@@ -216,17 +206,16 @@ def trigger_alert(payload: AlertPayload):
     """
     Receives a real Prometheus alert webhook (or manual trigger).
     Runs the full diagnosis pipeline:
-      1. Check incident memory for known fix (Person D's module)
-      2. Run signature engine for pattern match (Person B)
-      3. Fall back to LLM via Gemini for unknown failures (Person B)
+            1. Check incident memory for a known fix
+            2. Match the incident against the signature engine
+            3. Fall back to Gemini for unknown failures
     """
-    # Step 1 — Check memory for known past fix (Person D)
-    # First run the signature engine to get the failure_type label for the memory lookup
+        # Resolve the canonical failure label before looking up prior incidents.
     sig_result = signature_engine.diagnose(
         payload.logs, payload.metrics,
         pod_name=payload.pod_name, namespace=payload.namespace
     )
-    failure_type = sig_result["failure_type"]  # e.g. "OOMKilled" or "unknown"
+    failure_type = sig_result["failure_type"]
 
     memory_result = lookup_pattern(failure_type)
     if memory_result and memory_result.get("confidence", 0) >= 0.95 and failure_type != "unknown":
@@ -241,7 +230,7 @@ def trigger_alert(payload: AlertPayload):
         )
         return {"source": "memory", "result": current_state}
 
-    # Step 2 — Signature engine matched a known pattern
+    # Return the signature engine result for known failure patterns.
     if failure_type != "unknown":
         _update_state(
             pod_status="Warning",
@@ -254,7 +243,7 @@ def trigger_alert(payload: AlertPayload):
         )
         return {"source": "signature", "result": current_state}
 
-    # Step 3 — Unknown failure → LLM fallback via Gemini
+    # Use the LLM fallback only when no known pattern matches.
     from backend.llm_fallback import LLMFallback
     llm = LLMFallback()
     llm_result = llm.diagnose(
@@ -278,8 +267,7 @@ def trigger_alert(payload: AlertPayload):
 @app.post("/trigger-fake-alert")
 def trigger_fake_alert(payload: AlertPayload):
     """
-    Manual test trigger — works exactly like /trigger-alert.
-    Use this when Prometheus is not configured yet.
+    Manual alert trigger that mirrors the live alert path.
     """
     return trigger_alert(payload)
 
@@ -287,8 +275,7 @@ def trigger_fake_alert(payload: AlertPayload):
 @app.post("/trigger-fake-prediction")
 def trigger_fake_prediction(payload: PredictionPayload):
     """
-    Manual prediction test — simulates the predictive engine flow.
-    Accepts a list of memory readings and a memory limit.
+    Manual prediction trigger for the predictive engine.
     """
     result = predictor.analyze(payload.memory_readings, payload.memory_limit_mb)
 
@@ -323,7 +310,7 @@ def trigger_fake_prediction(payload: PredictionPayload):
 def system_status():
     """
     Returns the current pod status, memory readings, diagnosis, confidence, etc.
-    Person C's dashboard polls this every 2 seconds.
+    Dashboard polls this periodically.
     """
     return current_state
 
@@ -332,10 +319,9 @@ def system_status():
 def execute_command(payload: ExecutePayload):
     """
     Execute an approved kubectl command.
-    Person C's Approve button calls this.
-    Uses Person A's real restart_pod() from infrastructure.k8s_executor.
+    Uses restart_pod() from infrastructure.k8s_executor.
     """
-    # Safety: only allow whitelisted command prefixes
+    # Restrict execution to a small set of approved kubectl command prefixes.
     allowed_prefixes = ["kubectl delete pod", "kubectl rollout restart", "kubectl scale"]
     if not any(payload.kubectl_command.startswith(prefix) for prefix in allowed_prefixes):
         raise HTTPException(
@@ -343,19 +329,18 @@ def execute_command(payload: ExecutePayload):
             detail=f"Command not allowed. Must start with one of: {allowed_prefixes}",
         )
 
-    # Parse pod name and namespace from the kubectl command string
-    # Expected format: "kubectl delete pod <pod-name> -n <namespace>"
-    pod_name = "leaky-pod"  # safe default
+    # Extract pod name and namespace from the command string when present.
+    pod_name = "leaky-pod"
     namespace = "default"
     try:
         parts = payload.kubectl_command.split()
         if "-n" in parts:
             namespace = parts[parts.index("-n") + 1]
-        # pod name is the token after "pod" keyword
+        # The pod name is the token after the "pod" keyword.
         if "pod" in parts:
             pod_name = parts[parts.index("pod") + 1]
     except (ValueError, IndexError):
-        pass  # use defaults if parsing fails
+        pass
 
     if not ENABLE_K8S_EXECUTION:
         result = {
@@ -363,8 +348,7 @@ def execute_command(payload: ExecutePayload):
             "message": "Demo mode: fix approved and simulated successfully.",
         }
     else:
-    # Call Person A's real K8s executor
-    # Gracefully handles the case when Minikube is not running
+        # Attempt real execution when Kubernetes access is enabled.
         try:
             result = restart_pod(pod_name, namespace)
         except Exception as e:
@@ -373,18 +357,16 @@ def execute_command(payload: ExecutePayload):
                 "message": f"Kubernetes not reachable — is Minikube running? Error: {str(e)[:80]}",
             }
 
-    # Store outcome in memory (Person D's module)
-    # Use failure_type (e.g. "OOMKilled") not badge_type ("signature") so
-    # lookup_pattern() can find it on the next identical incident.
+    # Persist the outcome under the canonical failure label for future lookups.
     if current_state["diagnosis"]:
         store_outcome(
             failure_type=current_state.get("failure_type") or current_state.get("badge_type") or "unknown",
             fix=payload.kubectl_command,
-            # mock_success counts as success for memory learning (no Minikube demo mode)
+            # Treat demo-mode execution as a successful outcome for memory learning.
             success=result.get("status") in ("success", "mock_success"),
         )
 
-    # Reset state after execution
+    # Clear the active incident from the dashboard after execution completes.
     _update_state(
         pod_status="Healthy",
         memory_readings=[],
@@ -404,12 +386,12 @@ def execute_command(payload: ExecutePayload):
 def incident_history():
     """
     Returns past incidents with fix outcomes and confidence scores.
-    Uses Person D's real get_all_incidents() from memory.memory.
+    Uses get_all_incidents() from memory.memory.
     """
     return {"incidents": get_all_incidents()}
 
 
-# ── Internal Helpers ──
+# ── Internal helpers ──
 
 
 def _update_state(**kwargs):

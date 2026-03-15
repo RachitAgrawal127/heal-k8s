@@ -1,6 +1,6 @@
 """
 Heal-K8s — Signature Engine
-Person B — Day 1: Skeleton + regex pattern dictionary
+Skeleton + regex pattern dictionary
 
 Matches known Kubernetes failure patterns against pod logs and metrics.
 No LLM. Instant diagnosis. 95-99% confidence on known patterns.
@@ -149,7 +149,7 @@ class SignatureEngine:
         return confidence
 
 
-# ── Module-level function (Person D's tests import this directly) ──
+# ── Module-level function ──
 _engine = SignatureEngine()
 
 

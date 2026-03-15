@@ -6,7 +6,6 @@ from typing import Optional
 class Incident:
     """
     Represents a stored incident pattern in the memory database.
-    Used for type safety when passing data between modules.
     """
     failure_type: str
     fix: str

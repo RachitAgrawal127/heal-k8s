@@ -1,14 +1,11 @@
-"""
-Mock Prometheus Server for Testing Heal-K8s Predictive Polling
-Run this script, then start backend/main.py with PROMETHEUS_URL=http://localhost:9091
-"""
+"""Mock Prometheus server for local polling tests."""
 from fastapi import FastAPI
 import uvicorn
 import time
 
 app = FastAPI()
 
-# Simulate a leaky pod over time
+# Simulate a steadily leaking pod over time.
 START_TIME = time.time()
 POD_NAME = "test-leaky-pod-1"
 START_MB = 120
@@ -19,10 +16,9 @@ def mock_prometheus_query(query: str):
     elapsed = time.time() - START_TIME
     
     if "container_memory_working_set_bytes" in query:
-        # Simulate memory usage growing
+        # Return a monotonically increasing memory series.
         current_mb = START_MB + (elapsed * GROWTH_RATE_MB_PER_SEC)
-        current_bytes = current_mb * 1024 * 1024
-        
+
         return {
             "status": "success",
             "data": {
@@ -30,15 +26,13 @@ def mock_prometheus_query(query: str):
                 "result": [
                     {
                         "metric": {"pod": POD_NAME},
-                        "value": [time.time(), str(current_mb)] # The main code expects MB from query
+                        "value": [time.time(), str(current_mb)]
                     }
                 ]
             }
         }
         
     elif "kube_pod_container_resource_limits_memory_bytes" in query:
-        # Return a fixed 512MB limit
-        limit_bytes = 512 * 1024 * 1024
         return {
             "status": "success",
             "data": {
@@ -46,7 +40,7 @@ def mock_prometheus_query(query: str):
                 "result": [
                     {
                         "metric": {"pod": POD_NAME},
-                        "value": [time.time(), str(limit_bytes)]
+                        "value": [time.time(), str(512 * 1024 * 1024)]
                     }
                 ]
             }

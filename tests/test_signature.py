@@ -1,6 +1,5 @@
 """
-Person D owns this file — QA tests for Person B's signature engine.
-Person B builds signature_engine.py. Person D tests the interface.
+QA tests for the signature engine.
 """
 import os
 import sys

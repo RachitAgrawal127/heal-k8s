@@ -1,15 +1,14 @@
 from kubernetes import client, config
 import logging
 
-# Sets up logging so we can see what's happening when functions run
+# Configure module logging.
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def load_kube_config():
     """
-    Loads credentials to talk to Kubernetes.
-    Tries in-cluster config first (if running inside a pod),
-    falls back to local kubeconfig (our case — minikube on laptop).
+    Load Kubernetes credentials.
+    Try in-cluster configuration first, then fall back to the local kubeconfig.
     """
     try:
         config.load_incluster_config()
@@ -20,25 +19,24 @@ def load_kube_config():
 
 def get_pod_status(pod_name: str, namespace: str = "default") -> dict:
     """
-    Returns current status of a pod — phase, and whether it was OOMKilled.
-    This is what the dashboard reads to show current pod health.
+    Return the current pod phase, termination reason, and restart count.
     """
     load_kube_config()
-    v1 = client.CoreV1Api()  # V1 API handles core resources: pods, services, namespaces
+    v1 = client.CoreV1Api()
 
     try:
         pod = v1.read_namespaced_pod(name=pod_name, namespace=namespace)
         
-        phase = pod.status.phase  # "Running", "Pending", "Failed" etc.
-        
-        # Dig into container states to find OOMKilled
+        phase = pod.status.phase
+
+        # Inspect container state history for the most recent termination reason.
         last_reason = None
         restart_count = 0
         
         for cs in pod.status.container_statuses or []:
             restart_count = cs.restart_count
             if cs.last_state.terminated:
-                last_reason = cs.last_state.terminated.reason  # "OOMKilled"
+                last_reason = cs.last_state.terminated.reason
         
         return {
             "phase": phase,
@@ -54,9 +52,7 @@ def get_pod_status(pod_name: str, namespace: str = "default") -> dict:
 
 def restart_pod(pod_name: str, namespace: str = "default") -> dict:
     """
-    Fixes a crashed pod by deleting it.
-    Kubernetes automatically recreates it fresh from the original YAML spec.
-    This is the standard K8s restart pattern — there's no 'restart' command.
+    Delete a pod and rely on Kubernetes to recreate it.
     """
     load_kube_config()
     v1 = client.CoreV1Api()
@@ -82,8 +78,7 @@ def restart_pod(pod_name: str, namespace: str = "default") -> dict:
 def get_pod_logs(pod_name: str, namespace: str = "default", tail: int = 50) -> str:
     """
     Fetches the last N lines of logs from a pod.
-    Person B's signature engine reads these to pattern-match failure types.
-    e.g. logs containing 'OOMKilled' or 'ImagePullBackOff' trigger specific fixes.
+    The signature engine uses these logs for failure classification.
     """
     load_kube_config()
     v1 = client.CoreV1Api()
@@ -97,14 +92,13 @@ def get_pod_logs(pod_name: str, namespace: str = "default", tail: int = 50) -> s
         return logs if logs else "No logs available"
 
     except client.exceptions.ApiException as e:
-        # Pod might be in a state where logs aren't accessible
+        # Some pod states do not expose logs.
         return f"Could not fetch logs: {e.reason}"
 
 
 def list_pods(namespace: str = "default") -> list:
     """
-    Returns all pods in a namespace with their current status.
-    Useful for monitoring the full cluster health at a glance.
+    Return all pods in a namespace with their current status.
     """
     load_kube_config()
     v1 = client.CoreV1Api()

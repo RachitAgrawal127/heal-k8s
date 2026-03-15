@@ -1,22 +1,20 @@
 /* ═══════════════════════════════════════════════════════
-   Heal-K8s Dashboard — app.js (v2 — hardened)
-   Vanilla JS • Chart.js • MOCK_MODE auto-cycling
+  Heal-K8s Dashboard
+  Vanilla JS • Chart.js
    ═══════════════════════════════════════════════════════ */
 
-// ═══════════ MODULE 1: CONFIGURATION & MOCK SYSTEM ═══════════
+// ═══════════ MODULE 1: CONFIGURATION AND MOCK DATA ═══════════
 
 const CONFIG = {
   API_BASE: 'http://localhost:8000',
   POLL_INTERVAL_MS: 2000,
   HISTORY_POLL_MS: 10000,
-  MOCK_MODE: false,   // true = offline dev mode, false = hit real backend
-  FETCH_TIMEOUT_MS: 5000,  // [FIX-1] abort fetch after 5s to prevent stale connections
+  MOCK_MODE: false,   // Use local sample data instead of the backend.
+  FETCH_TIMEOUT_MS: 5000,
 };
 
-// ── Mock State Machine ──
-// Cycles: Healthy → Warning → Critical → Healthy ...
+// ── Mock state machine ──
 const MOCK_STATES = [
-  // State 0: Healthy
   {
     pod_status: 'Healthy',
     memory_readings: [120, 118, 122, 119, 121, 120, 118, 122],
@@ -27,7 +25,6 @@ const MOCK_STATES = [
     kubectl_command: null,
     memory_hit: false,
   },
-  // State 1: Warning (prediction firing)
   {
     pod_status: 'Warning',
     memory_readings: [120, 145, 178, 210, 255, 301, 355, 410],
@@ -38,7 +35,6 @@ const MOCK_STATES = [
     kubectl_command: 'kubectl delete pod leaky-app-7x9k2 -n default',
     memory_hit: false,
   },
-  // State 2: Critical (signature match)
   {
     pod_status: 'Critical',
     memory_readings: [120, 145, 178, 210, 255, 301, 355, 490],
@@ -82,15 +78,14 @@ function getMockState() {
   return { ...state };
 }
 
-// Advance mock state on a timer
+// Advance mock state on a timer.
 setInterval(() => {
   mockStateIndex = (mockStateIndex + 1) % MOCK_STATES.length;
 }, MOCK_CYCLE_MS);
 
 
-// ═══════════ MODULE 2: API CLIENT (hardened) ═══════════
+// ═══════════ MODULE 2: API CLIENT ═══════════
 
-// [FIX-1] AbortController factory — cancels stale requests when a new poll fires
 let statusController = null;
 let historyController = null;
 
@@ -114,7 +109,7 @@ async function fetchSystemStatus() {
     return getMockState();
   }
 
-  // [FIX-2] Cancel previous in-flight request to prevent pile-up
+  // Cancel the previous in-flight request before starting a new poll.
   if (statusController) statusController.abort();
   statusController = new AbortController();
 
@@ -133,7 +128,7 @@ async function fetchSystemStatus() {
 
 async function executeCommand(cmd) {
   if (CONFIG.MOCK_MODE) {
-    // [FIX-3] Simulate realistic network latency in mock mode
+    // Simulate network latency in mock mode.
     await new Promise(r => setTimeout(r, 600));
     return {
       status: 'executed',
@@ -162,7 +157,7 @@ async function fetchIncidentHistory() {
     return { incidents: MOCK_INCIDENTS };
   }
 
-  // [FIX-2] Cancel previous in-flight history request
+  // Cancel the previous in-flight history request before polling again.
   if (historyController) historyController.abort();
   historyController = new AbortController();
 
@@ -180,9 +175,9 @@ async function fetchIncidentHistory() {
 }
 
 
-// ═══════════ MODULE 3: UI UPDATERS (hardened) ═══════════
+// ═══════════ MODULE 3: UI UPDATERS ═══════════
 
-// Cache DOM references
+// Cache DOM references.
 const DOM = {
   statusBadge:    document.getElementById('status-badge'),
   badgeType:      document.getElementById('badge-type'),
@@ -201,10 +196,10 @@ const DOM = {
   k8sStatus:      document.getElementById('k8s-status'),
 };
 
-// Total circumference of the SVG confidence ring (2πr, r=52)
-const RING_CIRCUMFERENCE = 2 * Math.PI * 52;  // ≈ 326.73
+// Total circumference of the SVG confidence ring.
+const RING_CIRCUMFERENCE = 2 * Math.PI * 52;
 
-// [FIX-4] Diff-check: skip DOM writes when value hasn't changed
+// Skip DOM writes when the dashboard state is unchanged.
 let prevState = null;
 let countdownDeadlineMs = null;
 let countdownIntervalId = null;
@@ -246,7 +241,7 @@ function ensureCountdownTicker() {
 
 function stateChanged(newState) {
   if (!prevState) return true;
-  // Quick structural comparison for the fields that drive UI
+  // Compare only the fields that affect rendering.
   return prevState.pod_status !== newState.pod_status
       || prevState.prediction_seconds !== newState.prediction_seconds
       || prevState.confidence !== newState.confidence
@@ -280,7 +275,7 @@ function updateBadgeType(state) {
     DOM.badgeType.textContent = '—';
   }
 
-  // Memory hit indicator
+  // Memory hit indicator.
   if (state.memory_hit) {
     DOM.memoryHit.textContent = 'Yes';
     DOM.memoryHit.className = 'memory-hit-badge active';
@@ -329,11 +324,11 @@ function updateConfidence(state) {
   const pct = Math.round(state.confidence * 100);
   DOM.confidenceValue.textContent = pct + '%';
 
-  // Animate SVG ring
+  // Update the SVG ring.
   const offset = RING_CIRCUMFERENCE * (1 - state.confidence);
   DOM.confidenceArc.style.strokeDashoffset = offset;
 
-  // Color by confidence level
+  // Color by confidence level.
   if (state.confidence >= 0.95) {
     DOM.confidenceArc.className.baseVal = 'confidence-ring-fill';
   } else if (state.confidence >= 0.80) {
@@ -348,7 +343,7 @@ function updateApproveButton(state) {
   if (state.kubectl_command) {
     DOM.kubectlCmd.textContent = state.kubectl_command;
     DOM.kubectlCmd.className = 'kubectl-cmd';
-    // [FIX-5] Only re-enable if not mid-execution
+    // Leave the button disabled while a command is running.
     if (!isExecuting) {
       DOM.approveBtn.disabled = false;
     }
@@ -366,7 +361,7 @@ function updateMemoryChart(state) {
   memoryChart.data.labels = readings.map((_, i) => `R${i + 1}`);
   memoryChart.data.datasets[0].data = readings;
 
-  // Change chart color based on status
+  // Change chart color based on system status.
   const status = (state.pod_status || 'Healthy').toLowerCase();
   const colors = {
     healthy:  { border: '#00d68f', bg: 'rgba(0, 214, 143, 0.08)' },
@@ -378,15 +373,15 @@ function updateMemoryChart(state) {
   memoryChart.data.datasets[0].backgroundColor = c.bg;
   memoryChart.data.datasets[0].pointBackgroundColor = c.border;
 
-  memoryChart.update('none');  // 'none' = skip animation for fast updates
+  memoryChart.update('none');
 
-  // Update reading display
+  // Update the current reading label.
   const latest = readings[readings.length - 1];
   DOM.chartReading.textContent = latest != null ? `${latest} MB` : '— MB';
   DOM.chartReading.style.color = c.border;
 }
 
-// [FIX-6] XSS prevention: escape untrusted backend data before inserting into DOM
+// Escape backend strings before inserting them into the DOM.
 function escapeHtml(str) {
   if (!str) return '—';
   const div = document.createElement('div');
@@ -403,8 +398,7 @@ function updateIncidentTable(incidents) {
 
   DOM.incidentCount.textContent = `${incidents.length} incident${incidents.length !== 1 ? 's' : ''}`;
 
-  // [FIX-6] Use escapeHtml on all backend-sourced strings to prevent XSS
-  // Fields match real backend schema: fix, success_count, failure_count (not fix_applied/success/count/signature_matched)
+  // Fields match the backend schema: fix, success_count, and failure_count.
   DOM.incidentTable.innerHTML = incidents.map(inc => {
     const total = (inc.success_count || 0) + (inc.failure_count || 0);
     const majority = (inc.success_count || 0) >= (inc.failure_count || 0);
@@ -433,7 +427,7 @@ function formatTime(isoStr) {
   if (!isoStr) return '—';
   try {
     const d = new Date(isoStr);
-    if (isNaN(d.getTime())) return escapeHtml(isoStr); // [FIX-7] Guard invalid dates
+    if (isNaN(d.getTime())) return escapeHtml(isoStr);
     return d.toLocaleString('en-US', {
       month: 'short', day: 'numeric',
       hour: '2-digit', minute: '2-digit',
@@ -444,7 +438,7 @@ function formatTime(isoStr) {
 }
 
 
-// ═══════════ MODULE 4: CHART.JS SETUP ═══════════
+// ═══════════ MODULE 4: CHART CONFIGURATION ═══════════
 
 const memoryChart = new Chart(document.getElementById('memory-chart'), {
   type: 'line',
@@ -467,7 +461,6 @@ const memoryChart = new Chart(document.getElementById('memory-chart'), {
     responsive: true,
     maintainAspectRatio: false,
     interaction: { intersect: false, mode: 'index' },
-    // [FIX-8] Disable resize observer debounce for smoother responsiveness
     resizeDelay: 0,
     scales: {
       x: {
@@ -499,18 +492,18 @@ const memoryChart = new Chart(document.getElementById('memory-chart'), {
         },
       },
     },
-    animation: { duration: 0 }, // [FIX-9] Zero animation for 2s polling — prevents frame stacking
+    animation: { duration: 0 },
   },
 });
 
 
-// ═══════════ MODULE 5: MAIN LOOP & EVENT HANDLERS (hardened) ═══════════
+// ═══════════ MODULE 5: MAIN LOOP AND EVENTS ═══════════
 
-// [FIX-5] Execution state flag to prevent poll from re-enabling button mid-execution
+// Track command execution state.
 let isExecuting = false;
 let executeFeedbackTimeoutId = null;
 
-// [FIX-10] Polling guard: prevent overlapping async poll cycles
+// Prevent overlapping poll cycles.
 let isPollingStatus = false;
 let isPollingHistory = false;
 
@@ -518,7 +511,7 @@ let isPollingHistory = false;
 function initUI() {
   ensureCountdownTicker();
 
-  // Show/hide mock indicator
+  // Toggle the mock indicator.
   if (CONFIG.MOCK_MODE) {
     DOM.mockIndicator.classList.remove('hidden');
     DOM.k8sStatus.textContent = 'Mock';
@@ -532,10 +525,10 @@ function initUI() {
 function updateDashboard(state) {
   if (!state) return;
 
-  // [FIX-4] Skip DOM writes if nothing changed (saves layout/paint cycles)
+  // Skip render work when no UI-facing values changed.
   if (!stateChanged(state)) return;
 
-  // [FIX-11] Batch DOM writes inside rAF to prevent layout thrashing
+  // Batch DOM writes inside requestAnimationFrame.
   requestAnimationFrame(() => {
     updateStatusBadge(state);
     updateBadgeType(state);
@@ -548,9 +541,9 @@ function updateDashboard(state) {
   });
 }
 
-// ── Polling: System Status (with overlap guard) ──
+// ── Polling: System status ──
 async function pollSystemStatus() {
-  if (isPollingStatus) return; // [FIX-10] Skip if previous poll is still in-flight
+  if (isPollingStatus) return;
   isPollingStatus = true;
   try {
     const state = await fetchSystemStatus();
@@ -560,9 +553,9 @@ async function pollSystemStatus() {
   }
 }
 
-// ── Polling: Incident History (with overlap guard) ──
+// ── Polling: Incident history ──
 async function pollIncidentHistory() {
-  if (isPollingHistory) return; // [FIX-10]
+  if (isPollingHistory) return;
   isPollingHistory = true;
   try {
     const data = await fetchIncidentHistory();
@@ -574,7 +567,7 @@ async function pollIncidentHistory() {
   }
 }
 
-// ── Approve button click (hardened) ──
+// ── Approve button click ──
 DOM.approveBtn.addEventListener('click', async () => {
   const cmd = DOM.kubectlCmd.textContent;
   if (!cmd || cmd === 'No command pending') return;
@@ -584,7 +577,7 @@ DOM.approveBtn.addEventListener('click', async () => {
     executeFeedbackTimeoutId = null;
   }
 
-  // [FIX-5] Set execution flag so poll doesn't re-enable the button
+  // Keep the button disabled until the command finishes.
   isExecuting = true;
   DOM.approveBtn.disabled = true;
   DOM.approveBtn.textContent = '⏳ Executing...';
@@ -616,11 +609,11 @@ DOM.approveBtn.addEventListener('click', async () => {
     executeFeedbackTimeoutId = null;
   }, 1500);
 
-  // Re-enable button after a brief delay
+  // Re-enable the button after a brief delay.
   setTimeout(() => {
     isExecuting = false;
     DOM.approveBtn.innerHTML = '<span class="btn-icon">⚡</span> Approve & Execute';
-    // Only re-enable if there's still a command pending
+    // Re-enable only when a command is still available.
     if (DOM.kubectlCmd.textContent && DOM.kubectlCmd.textContent !== 'No command pending') {
       DOM.approveBtn.disabled = false;
     }
@@ -635,4 +628,4 @@ pollIncidentHistory();
 setInterval(pollSystemStatus, CONFIG.POLL_INTERVAL_MS);
 setInterval(pollIncidentHistory, CONFIG.HISTORY_POLL_MS);
 
-console.log(`[Heal-K8s] Dashboard initialized (v2 hardened) — MOCK_MODE: ${CONFIG.MOCK_MODE}`);
+console.log(`[Heal-K8s] Dashboard initialized — MOCK_MODE: ${CONFIG.MOCK_MODE}`);

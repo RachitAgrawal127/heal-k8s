@@ -1,14 +1,4 @@
-"""
-Heal-K8s — LLM Fallback Engine (Google Gemini)
-Person B — Day 1: Skeleton with structured output
 
-Only called when the Signature Engine finds NO match (~10% of real incidents).
-Uses Google Gemini API (free tier) with structured JSON output.
-
-Setup:
-  1. Get a free API key at: https://aistudio.google.com/app/apikey
-  2. Add to your .env file: GEMINI_API_KEY=your_key_here
-"""
 
 import os
 import json
@@ -16,8 +6,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Will be fully implemented on Days 3-4
-# For now, provides a skeleton that returns a structured fallback response
+# Structured fallback response for unknown incidents.
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
@@ -46,7 +35,7 @@ class LLMFallback:
 
     def __init__(self):
         self.api_key = GEMINI_API_KEY
-        self.model_name = "gemini-2.0-flash"  # Free tier model
+        self.model_name = "gemini-2.0-flash"
 
     def diagnose(self, pod_name: str, namespace: str, logs: str, metrics: dict) -> dict:
         """
@@ -61,7 +50,7 @@ class LLMFallback:
         Returns:
             dict with keys: failure_type, diagnosis, confidence, kubectl_command, reasoning
         """
-        if not self.api_key or self.api_key == "your_gemini_api_key_here":
+        if not self.api_key or self.api_key == "your_key_here":
             return self._mock_response(pod_name, namespace, logs)
 
         try:
@@ -84,7 +73,7 @@ class LLMFallback:
             response = model.generate_content(user_prompt)
             raw_text = response.text.strip()
 
-            # Parse the JSON response (strip markdown fences if present)
+            # Strip markdown fences when the model wraps the response.
             if raw_text.startswith("```"):
                 raw_text = raw_text.split("\n", 1)[1]  # remove first line
                 raw_text = raw_text.rsplit("```", 1)[0]  # remove last fence
@@ -92,7 +81,7 @@ class LLMFallback:
 
             result = json.loads(raw_text)
 
-            # Validate expected keys
+            # Validate the expected response fields.
             required_keys = ["failure_type", "diagnosis", "confidence", "kubectl_command"]
             for key in required_keys:
                 if key not in result:
